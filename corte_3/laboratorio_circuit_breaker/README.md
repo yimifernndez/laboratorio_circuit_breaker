@@ -658,3 +658,129 @@ También se separaron los contadores de fallos para que cada servicio tenga su p
 Gracias a esto, si el servicio de usuarios falla, solo se abre el circuito de usuarios y el servicio de mascotas puede seguir funcionando.
 
 Esto mejora el comportamiento del gateway porque evita que una falla en un servicio afecte todo el sistema.
+
+# FASE 3 – INVESTIGAR  
+## Half-Open
+
+En esta fase se investigó el concepto de **Half-Open**, el cual hace parte del patrón Circuit Breaker.
+
+Actualmente, el sistema ya puede abrir el circuito cuando un servicio falla varias veces. Sin embargo, todavía tiene una limitación: cuando el circuito se abre, queda bloqueado y no intenta recuperarse automáticamente.
+
+Por esta razón se analiza el estado **Half-Open**, que permite realizar una prueba controlada para verificar si el servicio que estaba fallando ya volvió a funcionar.
+
+---
+
+## ¿Qué significa Half-Open?
+
+Half-Open significa “medio abierto”.
+
+Es un estado intermedio del Circuit Breaker. Se utiliza después de que el circuito ha estado abierto durante un tiempo determinado.
+
+En este estado, el gateway permite realizar una sola petición de prueba hacia el servicio que estaba fallando.
+
+Si esa petición funciona correctamente, el circuito se cierra.  
+Si la petición falla, el circuito se vuelve a abrir.
+
+---
+
+## ¿Cuándo se vuelve a intentar una llamada?
+
+La llamada se vuelve a intentar después de esperar un tiempo definido por el sistema.
+
+Por ejemplo, si el circuito se abre porque el servicio falló tres veces, el sistema puede esperar 10 segundos antes de intentar nuevamente una conexión.
+
+El comportamiento sería el siguiente:
+
+```txt
+Servicio falla varias veces
+↓
+Circuito abierto
+↓
+Espera controlada
+↓
+Prueba en estado Half-Open
+```
+
+---
+
+## ¿Qué pasa si el servicio responde bien?
+
+Si el servicio responde bien durante la prueba Half-Open, significa que ya se recuperó.
+
+En ese caso:
+
+```txt
+Half-Open
+↓
+Servicio responde correctamente
+↓
+Circuito cerrado
+↓
+Contador de fallos vuelve a cero
+```
+
+Después de esto, el gateway vuelve a enviar las peticiones normalmente al servicio.
+
+---
+
+## ¿Qué pasa si el servicio vuelve a fallar?
+
+Si el servicio vuelve a fallar durante la prueba Half-Open, significa que todavía no está disponible.
+
+En ese caso:
+
+```txt
+Half-Open
+↓
+Servicio falla otra vez
+↓
+Circuito abierto nuevamente
+↓
+Se bloquean las peticiones temporalmente
+```
+
+Esto evita que el gateway siga insistiendo sobre un servicio que todavía está caído.
+
+---
+
+## Diferencia con la implementación actual
+
+En la implementación actual, cuando el circuito se abre, queda bloqueado y no se recupera automáticamente.
+
+Con Half-Open, el sistema mejora porque después de un tiempo hace una prueba controlada.  
+Esto permite que el gateway pueda volver a funcionar normalmente cuando el servicio se recupere.
+
+---
+
+## Evidencia de la Fase 3
+
+La evidencia de esta fase se debe guardar en:
+
+```txt
+corte_3/laboratorio_circuit_breaker/evidencias/fase3.png
+```
+
+La evidencia puede mostrar la explicación del estado Half-Open o un diagrama sencillo del comportamiento:
+
+```txt
+CERRADO → ABIERTO → HALF-OPEN → CERRADO
+```
+
+o también:
+
+```txt
+CERRADO → ABIERTO → HALF-OPEN → ABIERTO
+```
+
+![Evidencia Fase 3](evidencias/fase3.png)
+
+---
+
+## Conclusión de la Fase 3
+
+Half-Open permite que el Circuit Breaker no quede bloqueado de forma permanente.
+
+Este estado ayuda a que el sistema pueda probar si un servicio caído ya volvió a funcionar. Si responde bien, el circuito se cierra. Si vuelve a fallar, el circuito se abre nuevamente.
+
+Gracias a esto, el gateway se vuelve más resiliente porque no solo detecta fallos, sino que también puede intentar recuperarse de forma controlada.
+
