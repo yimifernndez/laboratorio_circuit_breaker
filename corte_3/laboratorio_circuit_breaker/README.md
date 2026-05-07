@@ -130,3 +130,531 @@ En esta fase se comprobó que el sistema ya cuenta con un Circuit Breaker básic
 Cuando el servicio de mascotas se apaga, el gateway intenta comunicarse con él. Si la comunicación falla, el sistema empieza a contar los fallos. Al llegar al tercer fallo, el circuito se abre y el gateway deja de insistir.
 
 Sin embargo, esta implementación todavía es básica, porque cuando el circuito queda abierto no intenta recuperarse automáticamente. Por eso, en las siguientes fases se debe implementar la lógica de recuperación usando el estado Half-Open.
+
+# FASE 2 – APLICAR  
+## Extensión del Circuit Breaker
+
+En esta fase se aplicó el mismo comportamiento del Circuit Breaker que ya existía en el endpoint `/mascotas`, pero ahora también para el endpoint `/usuarios`.
+
+La idea principal fue no cambiar completamente la estructura del código, sino adaptar la lógica que ya se tenía en clase para que cada servicio tuviera su propio control de fallos.
+
+---
+
+## Objetivo de la fase
+
+El objetivo de esta fase fue extender el Circuit Breaker a otros endpoints del gateway, principalmente:
+
+```txt
+/usuarios
+/mascotas
+```
+
+De esta manera, si falla el servicio de usuarios, solo se bloquea temporalmente `/usuarios`, pero `/mascotas` puede seguir funcionando normalmente.
+
+---
+
+## Código implementado en gateway/app.py
+
+El archivo modificado fue:
+
+```txt
+gateway/app.py
+```
+
+El código quedó de la siguiente manera:
+
+```python
+from flask import Flask, request, jsonify
+import requests
+
+app = Flask(__name__)
+
+# Circuit Breaker para el servicio de mascotas
+fallos_backend = 0
+circuito_backend_abierto = False
+
+# Circuit Breaker para el servicio de usuarios
+fallos_usuarios = 0
+circuito_usuarios_abierto = False
+
+
+@app.route("/usuarios")
+def usuarios():
+    global fallos_usuarios, circuito_usuarios_abierto
+
+    if circuito_usuarios_abierto:
+        return {"error": "Servicio de usuarios temporalmente bloqueado"}, 503
+
+    try:
+        response = requests.get("http://usuarios:5000/usuarios", timeout=2)
+        fallos_usuarios = 0
+        return jsonify(response.json())
+
+    except:
+        fallos_usuarios += 1
+        print(f"Fallo número {fallos_usuarios} en usuarios", flush=True)
+
+        if fallos_usuarios >= 3:
+            circuito_usuarios_abierto = True
+            print("Circuito abierto para usuarios", flush=True)
+
+        return {"error": "Servicio de usuarios no disponible"}, 503
+
+
+@app.route("/mascotas")
+def mascotas():
+    global fallos_backend, circuito_backend_abierto
+
+    if circuito_backend_abierto:
+        return {"error": "Servicio de mascotas temporalmente bloqueado"}, 503
+
+    try:
+        response = requests.get("http://backend:5000/mascotas", timeout=2)
+        fallos_backend = 0
+        return response.json()
+
+    except:
+        fallos_backend += 1
+        print(f"Fallo número {fallos_backend} en mascotas", flush=True)
+
+        if fallos_backend >= 3:
+            circuito_backend_abierto = True
+            print("Circuito abierto para mascotas", flush=True)
+
+        return {"error": "Servicio de mascotas no disponible"}, 503
+
+
+@app.route("/estado-circuitos")
+def estado_circuitos():
+    return {
+        "mascotas": {
+            "fallos": fallos_backend,
+            "circuito_abierto": circuito_backend_abierto
+        },
+        "usuarios": {
+            "fallos": fallos_usuarios,
+            "circuito_abierto": circuito_usuarios_abierto
+        }
+    }
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
+```
+
+---
+
+## Explicación del código implementado
+
+Primero se separaron los contadores de fallos para cada servicio.
+
+Para el servicio de mascotas se dejó:
+
+```python
+fallos_backend = 0
+circuito_backend_abierto = False
+```
+
+Para el servicio de usuarios se agregó:
+
+```python
+fallos_usuarios = 0
+circuito_usuarios_abierto = False
+```
+
+Esto permite que cada servicio tenga su propio Circuit Breaker.
+
+---
+
+## Circuit Breaker para usuarios
+
+En el endpoint `/usuarios`, primero se valida si el circuito ya está abierto:
+
+```python
+if circuito_usuarios_abierto:
+    return {"error": "Servicio de usuarios temporalmente bloqueado"}, 503
+```
+
+Si el circuito está abierto, el gateway no intenta llamar al servicio de usuarios.  
+Responde directamente con un error controlado.
+
+Después, si el circuito está cerrado, intenta comunicarse con el servicio:
+
+```python
+response = requests.get("http://usuarios:5000/usuarios", timeout=2)
+```
+
+Si el servicio responde correctamente, el contador de fallos vuelve a cero:
+
+```python
+fallos_usuarios = 0
+```
+
+Pero si el servicio falla, entra al `except` y aumenta el contador:
+
+```python
+fallos_usuarios += 1
+```
+
+Cuando llega a tres fallos, el circuito se abre:
+
+```python
+if fallos_usuarios >= 3:
+    circuito_usuarios_abierto = True
+    print("Circuito abierto para usuarios", flush=True)
+```
+
+---
+
+## Circuit Breaker para mascotas
+
+El Circuit Breaker de mascotas conserva la misma idea trabajada en clase.
+
+Si el circuito está abierto, responde:
+
+```python
+if circuito_backend_abierto:
+    return {"error": "Servicio de mascotas temporalmente bloqueado"}, 503
+```
+
+Si el servicio de mascotas responde bien, reinicia el contador de fallos:
+
+```python
+fallos_backend = 0
+```
+
+Si falla, aumenta el contador:
+
+```python
+fallos_backend += 1
+```
+
+Y cuando llega a tres fallos, abre el circuito:
+
+```python
+if fallos_backend >= 3:
+    circuito_backend_abierto = True
+    print("Circuito abierto para mascotas", flush=True)
+```
+
+---
+
+## Endpoint agregado para revisar el estado de los circuitos
+
+También se agregó el endpoint:
+
+```txt
+/estado-circuitos
+```
+
+Este endpoint permite ver el estado actual de los circuitos del sistema.
+
+Código implementado:
+
+```python
+@app.route("/estado-circuitos")
+def estado_circuitos():
+    return {
+        "mascotas": {
+            "fallos": fallos_backend,
+            "circuito_abierto": circuito_backend_abierto
+        },
+        "usuarios": {
+            "fallos": fallos_usuarios,
+            "circuito_abierto": circuito_usuarios_abierto
+        }
+    }
+```
+
+Este endpoint muestra si el circuito de mascotas o usuarios está abierto o cerrado.
+
+Ejemplo de respuesta:
+
+```json
+{
+  "mascotas": {
+    "circuito_abierto": false,
+    "fallos": 0
+  },
+  "usuarios": {
+    "circuito_abierto": false,
+    "fallos": 0
+  }
+}
+```
+
+---
+
+## Comandos utilizados
+
+Después de modificar el archivo `gateway/app.py`, se reconstruyó el gateway para que tomara los cambios:
+
+```bash
+docker compose up -d --build gateway
+```
+
+Luego se verificó que los contenedores estuvieran activos:
+
+```bash
+docker compose ps
+```
+
+También se inició nuevamente el backend de mascotas, porque en la fase anterior se había apagado:
+
+```bash
+docker compose start backend
+```
+
+Y se verificó que el servicio de usuarios estuviera activo:
+
+```bash
+docker compose start usuarios
+```
+
+---
+
+## Pruebas realizadas
+
+Primero se probó que el endpoint de usuarios funcionara correctamente:
+
+```txt
+http://localhost:5000/usuarios
+```
+
+Respuesta esperada:
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Mariani"
+  },
+  {
+    "id": 2,
+    "nombre": "Carlos"
+  }
+]
+```
+
+Luego se probó que el endpoint de mascotas siguiera funcionando:
+
+```txt
+http://localhost:5000/mascotas
+```
+
+Respuesta esperada:
+
+```json
+{
+  "mascotas": [
+    [
+      1,
+      "Toby",
+      "Perro"
+    ]
+  ]
+}
+```
+
+También se probó el nuevo endpoint de estado de circuitos:
+
+```txt
+http://localhost:5000/estado-circuitos
+```
+
+Respuesta esperada:
+
+```json
+{
+  "mascotas": {
+    "circuito_abierto": false,
+    "fallos": 0
+  },
+  "usuarios": {
+    "circuito_abierto": false,
+    "fallos": 0
+  }
+}
+```
+
+---
+
+## Prueba apagando el servicio de usuarios
+
+Para comprobar que el Circuit Breaker también funciona en usuarios, se apagó el servicio de usuarios con el siguiente comando:
+
+```bash
+docker compose stop usuarios
+```
+
+Luego se realizaron varias peticiones al endpoint:
+
+```txt
+http://localhost:5000/usuarios
+```
+
+Después de varios intentos fallidos, el sistema respondió:
+
+```json
+{
+  "error": "Servicio de usuarios temporalmente bloqueado"
+}
+```
+
+Esto indica que el Circuit Breaker de usuarios se abrió correctamente.
+
+---
+
+## Verificación del estado de los circuitos
+
+Después de apagar usuarios y realizar varias peticiones, se revisó nuevamente:
+
+```txt
+http://localhost:5000/estado-circuitos
+```
+
+El resultado esperado fue similar al siguiente:
+
+```json
+{
+  "mascotas": {
+    "circuito_abierto": false,
+    "fallos": 0
+  },
+  "usuarios": {
+    "circuito_abierto": true,
+    "fallos": 3
+  }
+}
+```
+
+Esto demuestra que el circuito de usuarios se abrió, pero el circuito de mascotas siguió cerrado.
+
+---
+
+## Comprobación de independencia entre servicios
+
+Después de que el servicio de usuarios falló, se probó el endpoint de mascotas:
+
+```txt
+http://localhost:5000/mascotas
+```
+
+El servicio de mascotas siguió funcionando correctamente.
+
+Esto demuestra que los circuitos son independientes:
+
+```txt
+Si falla usuarios, no se afecta mascotas.
+Si falla mascotas, no se afecta usuarios.
+```
+
+---
+
+## Logs del gateway
+
+Para revisar los logs del gateway se usó el comando:
+
+```bash
+docker compose logs -f gateway
+```
+
+En los logs se pudo evidenciar el comportamiento del Circuit Breaker para usuarios:
+
+```txt
+Fallo número 1 en usuarios
+Fallo número 2 en usuarios
+Fallo número 3 en usuarios
+Circuito abierto para usuarios
+```
+
+Esto demuestra que el gateway detectó los fallos del servicio de usuarios y abrió el circuito después del tercer intento fallido.
+
+---
+
+## Respuestas del análisis
+
+### ¿Cada servicio debe tener su propio contador de fallos?
+
+Sí. Cada servicio debe tener su propio contador de fallos, porque no todos los servicios fallan al mismo tiempo.
+
+En este caso se manejaron dos contadores:
+
+```python
+fallos_backend = 0
+fallos_usuarios = 0
+```
+
+El contador `fallos_backend` controla los fallos del servicio de mascotas.  
+El contador `fallos_usuarios` controla los fallos del servicio de usuarios.
+
+---
+
+### ¿El circuito debe abrirse de forma independiente por servicio?
+
+Sí. El circuito debe abrirse de manera independiente por cada servicio.
+
+Por ejemplo, si falla el servicio de usuarios, solo se abre el circuito de usuarios:
+
+```python
+circuito_usuarios_abierto = True
+```
+
+Pero el circuito de mascotas puede seguir cerrado:
+
+```python
+circuito_backend_abierto = False
+```
+
+Esto permite que el sistema siga funcionando parcialmente aunque un servicio falle.
+
+---
+
+### ¿Qué pasa si falla un servicio pero el otro sigue funcionando?
+
+Si falla un servicio, el gateway debe bloquear temporalmente solo ese servicio.
+
+Por ejemplo, si se apaga usuarios:
+
+```txt
+/usuarios → falla y abre circuito
+/mascotas → sigue funcionando
+```
+
+Esto ayuda a que el sistema no se caiga completamente por la falla de un solo servicio.
+
+---
+
+## Evidencia de la Fase 2
+
+En esta fase se debe guardar la evidencia en:
+
+```txt
+corte_3/laboratorio_circuit_breaker/evidencias/fase2.png
+```
+
+La evidencia debe mostrar:
+
+- El servicio de usuarios apagado.
+- El mensaje de servicio temporalmente bloqueado.
+- El endpoint `/estado-circuitos`.
+- Los logs donde se vea que se abrió el circuito de usuarios.
+
+Ejemplo de imagen en el README:
+
+```md
+![Evidencia Fase 2](evidencias/fase2.png)
+```
+
+![Evidencia Fase 2](evidencias/fase2.png)
+
+---
+
+## Conclusión de la Fase 2
+
+En esta fase se extendió el Circuit Breaker al endpoint `/usuarios`, manteniendo la lógica sencilla trabajada en clase.
+
+También se separaron los contadores de fallos para que cada servicio tenga su propio control.  
+Gracias a esto, si el servicio de usuarios falla, solo se abre el circuito de usuarios y el servicio de mascotas puede seguir funcionando.
+
+Esto mejora el comportamiento del gateway porque evita que una falla en un servicio afecte todo el sistema.
