@@ -1416,3 +1416,101 @@ Después, cuando el servicio vuelve a estar disponible, el gateway espera un tie
 Si la prueba funciona, el circuito se cierra y el sistema vuelve a responder normalmente.
 
 Esto demuestra que el sistema no solo detecta fallos, sino que también puede recuperarse de forma controlada.
+
+# ANÁLISIS FINAL
+
+## ¿Qué cambió en el comportamiento del sistema?
+
+Antes, cuando un servicio se caía, el gateway seguía intentando comunicarse con él y el sistema seguía mostrando errores.
+
+Ahora el sistema funciona mejor. Cuando un servicio falla varias veces, el Circuit Breaker se abre y deja de insistir por un momento.
+
+También se agregó la recuperación con Half-Open. Esto permite que, después de unos segundos, el sistema vuelva a probar si el servicio ya funciona. Si responde bien, el circuito se cierra y todo vuelve a la normalidad.
+
+Además, el endpoint `/relacion` quedó funcionando de forma más completa, porque si se cae usuarios, todavía muestra mascotas, y si se cae mascotas, todavía muestra usuarios.
+
+---
+
+## ¿Qué decisiones tomaron en la implementación?
+
+Se decidió manejar cada servicio por separado.
+
+Por eso, usuarios tiene su propio contador de fallos y mascotas también tiene el suyo. Así, si falla un servicio, no afecta directamente al otro.
+
+También se decidió abrir el circuito después de 3 fallos. De esta forma, el gateway entiende que el servicio tiene problemas y deja de insistir.
+
+Para la recuperación se usó un tiempo de espera de 10 segundos. Después de ese tiempo, el sistema hace una prueba para saber si el servicio ya volvió a funcionar.
+
+También se agregó el endpoint `/estado-circuitos`, porque permite ver fácilmente si los circuitos están abiertos o cerrados.
+
+Por último, se modificó `/relacion` para que consulte usuarios y mascotas por separado. Así, si uno falla, el otro puede seguir mostrando información.
+
+---
+
+## ¿Qué dificultades encontraron?
+
+Una dificultad fue que al inicio el servicio de mascotas no funcionaba porque faltaba crear la tabla en la base de datos.
+
+También pasó que algunos cambios no se veían en el navegador, porque no bastaba con reiniciar el gateway. Fue necesario reconstruirlo con Docker.
+
+Otra dificultad fue hacer que `/relacion` siguiera funcionando aunque un servicio se apagara. Esto se solucionó consultando usuarios y mascotas por separado.
+
+También fue necesario aprender a subir los cambios a GitHub paso a paso usando `git add`, `git commit` y `git push`.
+
+---
+
+## Conclusión general
+
+El sistema quedó más estable.
+
+Ahora, si un servicio falla, el gateway no se queda insistiendo todo el tiempo. Lo bloquea temporalmente, espera un momento y luego prueba si ya se recuperó.
+
+También puede seguir mostrando información parcial cuando uno de los servicios está caído.
+
+En pocas palabras, el sistema ahora aprende a fallar y también puede recuperarse.
+
+---
+
+# TABLA DE COMANDOS UTILIZADOS
+
+| Comando | ¿Qué hace? |
+|---|---|
+| `docker compose up --build` | Construye e inicia todos los servicios del proyecto. |
+| `docker compose up -d --build` | Inicia todos los servicios en segundo plano. |
+| `docker compose up -d --build gateway` | Reconstruye solo el gateway para aplicar cambios en el código. |
+| `docker compose up -d --build backend gateway` | Reconstruye el backend y el gateway. |
+| `docker compose ps` | Muestra qué contenedores están activos o apagados. |
+| `docker compose stop usuarios` | Apaga el servicio de usuarios para simular una falla. |
+| `docker compose start usuarios` | Vuelve a encender el servicio de usuarios. |
+| `docker compose stop backend` | Apaga el servicio de mascotas. |
+| `docker compose start backend` | Vuelve a encender el servicio de mascotas. |
+| `docker compose restart gateway` | Reinicia el gateway rápidamente. |
+| `docker compose logs -f gateway` | Muestra los logs del gateway en tiempo real. |
+| `docker compose logs gateway` | Muestra los logs del gateway sin dejarlos en vivo. |
+| `docker compose exec gateway sh -c "grep -n relacion app.py"` | Verifica si `/relacion` está dentro del gateway. |
+| `docker compose exec gateway sh -c "grep -n estado app.py"` | Verifica si `/estado-circuitos` está dentro del gateway. |
+| `docker compose exec db mysql -uroot -p123456 app_db` | Permite entrar a la base de datos MySQL. |
+| `CREATE TABLE mascotas (...)` | Crea la tabla de mascotas en la base de datos. |
+| `INSERT INTO mascotas (...)` | Agrega una mascota de prueba. |
+| `SELECT * FROM mascotas;` | Consulta las mascotas guardadas. |
+| `git status` | Muestra los archivos modificados o pendientes. |
+| `git add .` | Agrega todos los cambios para guardarlos. |
+| `git add corte_3/` | Agrega solo los cambios de la carpeta `corte_3`. |
+| `git commit -m "mensaje"` | Guarda los cambios localmente con una descripción. |
+| `git push` | Sube los cambios a GitHub. |
+| `git diff backend/app.py` | Muestra los cambios realizados en ese archivo. |
+| `git restore backend/app.py` | Revierte los cambios locales de ese archivo. |
+| `git branch -M main` | Define `main` como rama principal. |
+| `git remote add origin URL` | Conecta el proyecto local con GitHub. |
+| `git push -u origin main` | Sube el proyecto por primera vez a GitHub. |
+
+---
+
+# ENDPOINTS UTILIZADOS
+
+| Endpoint | ¿Qué hace? |
+|---|---|
+| `http://localhost:5000/usuarios` | Muestra los usuarios registrados. |
+| `http://localhost:5000/mascotas` | Muestra las mascotas registradas. |
+| `http://localhost:5000/estado-circuitos` | Muestra si los circuitos están abiertos o cerrados. |
+| `http://localhost:5000/relacion` | Muestra usuarios y mascotas juntos. Si un servicio falla, muestra la información del otro. |
