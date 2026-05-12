@@ -14,21 +14,6 @@ def get_connection():
        database = os.getenv("DB_NAME")
     )
 
-@app.route("/relacion")
-def relacion():
-    usuarios= requests.get("http://usuarios:5000/usuarios").json()
-    connection = get_connection()
-    cursor= connection.cursor()
-    cursor.execute("SELECT nombre FROM mascotas")
-    mascota = cursor.fetchone()
-    connection.close()
-    nombre_usuario = usuarios[0]["nombre"] if usuarios else "Sin usuario"
-    nombre_mascota = mascota[0] if mascota else "Sin mascota"
-
-    return {
-        "usuario": nombre_usuario,
-        "Mascota": nombre_mascota
-    }
 
 @app.route("/")
 def home():
