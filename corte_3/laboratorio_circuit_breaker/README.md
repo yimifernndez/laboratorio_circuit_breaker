@@ -1196,3 +1196,223 @@ Si el servicio vuelve a fallar, el circuito se abre nuevamente.
 Además, el endpoint `/relacion` permite que el sistema siga mostrando la información disponible aunque usuarios o mascotas presenten fallos.
 
 Esto mejora la resiliencia del gateway porque evita insistir innecesariamente y permite que el sistema se recupere de forma controlada.
+
+# FASE 5 – VALIDAR
+
+En esta fase se validó el funcionamiento completo del sistema después de implementar el Circuit Breaker y la recuperación mediante Half-Open.
+
+La validación se realizó probando cuatro escenarios:
+
+1. Servicio funcionando.
+2. Servicio caído.
+3. Circuito abierto.
+4. Recuperación del servicio.
+
+---
+
+## 1. Servicio funcionando
+
+Primero se verificó que el servicio de usuarios estuviera activo y respondiendo correctamente.
+
+Se probó el endpoint:
+
+```txt
+http://localhost:5000/usuarios
+```
+
+El sistema respondió mostrando los usuarios registrados:
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Mariani"
+  },
+  {
+    "id": 2,
+    "nombre": "Carlos"
+  }
+]
+```
+
+También se revisó el estado de los circuitos en:
+
+```txt
+http://localhost:5000/estado-circuitos
+```
+
+El resultado mostró que los circuitos estaban cerrados, sin fallos registrados:
+
+```json
+{
+  "mascotas": {
+    "circuito_abierto": false,
+    "fallos": 0,
+    "ultimo_fallo": null
+  },
+  "usuarios": {
+    "circuito_abierto": false,
+    "fallos": 0,
+    "ultimo_fallo": null
+  }
+}
+```
+
+Esto demuestra que el sistema funciona correctamente cuando los servicios están activos.
+
+---
+
+## 2. Servicio caído
+
+Después se apagó el servicio de usuarios para simular una falla.
+
+El comando utilizado fue:
+
+```bash
+docker compose stop usuarios
+```
+
+Luego se realizaron varias peticiones al endpoint:
+
+```txt
+http://localhost:5000/usuarios
+```
+
+Al estar apagado el servicio de usuarios, el gateway empezó a registrar fallos y respondió inicialmente:
+
+```json
+{
+  "error": "Servicio de usuarios no disponible"
+}
+```
+
+Esto demuestra que el gateway detectó que el servicio de usuarios no estaba disponible.
+
+---
+
+## 3. Circuito abierto
+
+Después de realizar varias peticiones al endpoint `/usuarios`, el contador de fallos llegó al límite definido.
+
+Cuando el sistema detectó tres fallos, abrió el circuito del servicio de usuarios.
+
+La respuesta obtenida fue:
+
+```json
+{
+  "error": "Servicio de usuarios temporalmente bloqueado"
+}
+```
+
+También se revisó el estado de los circuitos en:
+
+```txt
+http://localhost:5000/estado-circuitos
+```
+
+En este punto, el circuito de usuarios aparecía abierto:
+
+```json
+{
+  "usuarios": {
+    "circuito_abierto": true,
+    "fallos": 3
+  }
+}
+```
+
+Esto demuestra que el Circuit Breaker dejó de insistir sobre el servicio caído y bloqueó temporalmente las peticiones.
+
+---
+
+## 4. Recuperación del servicio
+
+Luego se volvió a encender el servicio de usuarios con el comando:
+
+```bash
+docker compose start usuarios
+```
+
+Después de esperar el tiempo definido en el código:
+
+```python
+TIEMPO_RECUPERACION = 10
+```
+
+se realizó nuevamente una petición al endpoint:
+
+```txt
+http://localhost:5000/usuarios
+```
+
+El sistema volvió a responder correctamente mostrando los usuarios registrados.
+
+También se revisó nuevamente:
+
+```txt
+http://localhost:5000/estado-circuitos
+```
+
+El estado del circuito volvió a quedar cerrado:
+
+```json
+{
+  "usuarios": {
+    "circuito_abierto": false,
+    "fallos": 0,
+    "ultimo_fallo": null
+  }
+}
+```
+
+Esto demuestra que el sistema entró en estado Half-Open, probó si el servicio ya se había recuperado y, como respondió correctamente, cerró el circuito.
+
+---
+
+## Logs del Gateway
+
+Para verificar el comportamiento del sistema desde los logs, se utilizó el comando:
+
+```bash
+docker compose logs -f gateway
+```
+
+En los logs se evidenció el siguiente comportamiento:
+
+```txt
+Fallo número 1 en usuarios
+Fallo número 2 en usuarios
+Fallo número 3 en usuarios
+Circuito abierto para usuarios
+Circuito de usuarios en estado HALF-OPEN
+Circuito de usuarios cerrado
+```
+
+Estos logs confirman que el gateway detectó los fallos, abrió el circuito, esperó un tiempo controlado, realizó una prueba de recuperación y cerró el circuito cuando el servicio volvió a funcionar.
+
+---
+
+## Evidencia de la Fase 5
+
+La evidencia de esta fase se encuentra en:
+
+```txt
+corte_3/laboratorio_circuit_breaker/evidencias/fase5.png
+```
+
+![Evidencia Fase 5](evidencias/fase5.png)
+
+---
+
+## Conclusión de la Fase 5
+
+En esta fase se comprobó que el sistema funciona correctamente en los diferentes escenarios solicitados.
+
+Cuando el servicio está activo, el gateway responde normalmente.  
+Cuando el servicio se cae, el gateway detecta los fallos y empieza a contarlos.  
+Cuando se llega al número máximo de fallos, el circuito se abre y se bloquean temporalmente las peticiones.  
+Después, cuando el servicio vuelve a estar disponible, el gateway espera un tiempo definido, entra en estado Half-Open y realiza una prueba de recuperación.
+
+Si la prueba funciona, el circuito se cierra y el sistema vuelve a responder normalmente.
+
+Esto demuestra que el sistema no solo detecta fallos, sino que también puede recuperarse de forma controlada.
