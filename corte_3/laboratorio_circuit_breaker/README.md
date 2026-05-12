@@ -784,3 +784,415 @@ Este estado ayuda a que el sistema pueda probar si un servicio caído ya volvió
 
 Gracias a esto, el gateway se vuelve más resiliente porque no solo detecta fallos, sino que también puede intentar recuperarse de forma controlada.
 
+
+# FASE 4 – IMPLEMENTAR  
+## Recuperación y funcionamiento parcial del sistema
+
+En esta fase se implementó la lógica de recuperación del Circuit Breaker usando el estado **Half-Open**.  
+Además, se mejoró el endpoint `/relacion` para que el sistema pueda seguir mostrando información aunque uno de los servicios esté caído.
+
+El objetivo principal fue que el gateway no se quedara bloqueado de forma permanente cuando un servicio falla, sino que después de un tiempo pueda volver a intentar la conexión.
+
+---
+
+## 1. Implementación de Half-Open
+
+Para implementar la recuperación del sistema, se agregó una espera controlada antes de volver a intentar una conexión con el servicio que falló.
+
+Se importó la librería `time`:
+
+```python
+import time
+```
+
+También se definió un tiempo de recuperación:
+
+```python
+TIEMPO_RECUPERACION = 10
+```
+
+Esto significa que el sistema espera 10 segundos antes de intentar nuevamente comunicarse con el servicio que se encuentra bloqueado.
+
+---
+
+## 2. Variables agregadas
+
+Se agregaron variables para guardar el momento en que ocurrió el último fallo de cada servicio.
+
+Para el servicio de mascotas:
+
+```python
+ultimo_fallo_backend = None
+```
+
+Para el servicio de usuarios:
+
+```python
+ultimo_fallo_usuarios = None
+```
+
+Estas variables permiten saber cuánto tiempo ha pasado desde que el circuito fue abierto.
+
+---
+
+## 3. Código implementado para usuarios
+
+En el endpoint `/usuarios`, cuando el circuito está abierto, el sistema calcula cuánto tiempo ha pasado desde el último fallo.
+
+```python
+if circuito_usuarios_abierto:
+    tiempo_actual = time.time()
+    tiempo_transcurrido = tiempo_actual - ultimo_fallo_usuarios
+
+    if tiempo_transcurrido < TIEMPO_RECUPERACION:
+        return {"error": "Servicio de usuarios temporalmente bloqueado"}, 503
+
+    print("Circuito de usuarios en estado HALF-OPEN", flush=True)
+```
+
+Si todavía no han pasado los 10 segundos, el sistema sigue bloqueando temporalmente el servicio.
+
+Si ya pasaron los 10 segundos, el sistema entra en estado **Half-Open** y permite una nueva prueba.
+
+---
+
+## 4. Decisión si usuarios responde correctamente
+
+Si el servicio de usuarios responde bien después de la espera, el circuito se cierra nuevamente.
+
+```python
+fallos_usuarios = 0
+circuito_usuarios_abierto = False
+ultimo_fallo_usuarios = None
+
+print("Circuito de usuarios cerrado", flush=True)
+```
+
+Esto quiere decir que el servicio se recuperó y el gateway puede volver a usarlo normalmente.
+
+---
+
+## 5. Decisión si usuarios vuelve a fallar
+
+Si el servicio de usuarios vuelve a fallar, el contador aumenta y el circuito se vuelve a abrir.
+
+```python
+fallos_usuarios += 1
+print(f"Fallo número {fallos_usuarios} en usuarios", flush=True)
+
+if fallos_usuarios >= 3:
+    circuito_usuarios_abierto = True
+    ultimo_fallo_usuarios = time.time()
+    print("Circuito abierto para usuarios", flush=True)
+```
+
+Esto evita que el gateway siga insistiendo sobre un servicio que todavía no se ha recuperado.
+
+---
+
+## 6. Código implementado para mascotas
+
+La misma lógica se aplicó al endpoint `/mascotas`.
+
+```python
+if circuito_backend_abierto:
+    tiempo_actual = time.time()
+    tiempo_transcurrido = tiempo_actual - ultimo_fallo_backend
+
+    if tiempo_transcurrido < TIEMPO_RECUPERACION:
+        return {"error": "Servicio de mascotas temporalmente bloqueado"}, 503
+
+    print("Circuito de mascotas en estado HALF-OPEN", flush=True)
+```
+
+Si ya pasó el tiempo de recuperación, el gateway intenta hacer una nueva petición al servicio de mascotas.
+
+Si responde bien, el circuito se cierra:
+
+```python
+fallos_backend = 0
+circuito_backend_abierto = False
+ultimo_fallo_backend = None
+
+print("Circuito de mascotas cerrado", flush=True)
+```
+
+Si vuelve a fallar, el circuito se abre nuevamente:
+
+```python
+fallos_backend += 1
+print(f"Fallo número {fallos_backend} en mascotas", flush=True)
+
+if fallos_backend >= 3:
+    circuito_backend_abierto = True
+    ultimo_fallo_backend = time.time()
+    print("Circuito abierto para mascotas", flush=True)
+```
+
+---
+
+## 7. Endpoint `/estado-circuitos`
+
+También se actualizó el endpoint `/estado-circuitos` para mostrar el estado de cada circuito y el momento del último fallo.
+
+```python
+@app.route("/estado-circuitos")
+def estado_circuitos():
+    return {
+        "mascotas": {
+            "fallos": fallos_backend,
+            "circuito_abierto": circuito_backend_abierto,
+            "ultimo_fallo": ultimo_fallo_backend
+        },
+        "usuarios": {
+            "fallos": fallos_usuarios,
+            "circuito_abierto": circuito_usuarios_abierto,
+            "ultimo_fallo": ultimo_fallo_usuarios
+        }
+    }
+```
+
+Este endpoint permite verificar si los servicios están funcionando, si tienen fallos o si el circuito está abierto.
+
+---
+
+## 8. Implementación del endpoint `/relacion`
+
+Además de la recuperación con Half-Open, se implementó el endpoint `/relacion` para que el sistema siga funcionando aunque uno de los servicios se caiga.
+
+El código agregado fue:
+
+```python
+@app.route("/relacion")
+def relacion():
+    # Consultar servicio de usuarios
+    try:
+        response_usuarios = requests.get("http://usuarios:5000/usuarios", timeout=2)
+        usuarios = response_usuarios.json()
+        estado_usuarios = "usuarios funcionando correctamente"
+    except:
+        usuarios = []
+        estado_usuarios = "no está funcionando usuarios"
+
+    # Consultar servicio de mascotas
+    try:
+        response_mascotas = requests.get("http://backend:5000/mascotas", timeout=2)
+        datos_mascotas = response_mascotas.json()
+        estado_mascotas = "mascotas funcionando correctamente"
+
+        mascotas = datos_mascotas.get("mascotas", [])
+
+    except:
+        mascotas = []
+        estado_mascotas = "no está funcionando mascotas"
+
+    return jsonify({
+        "estado_usuarios": estado_usuarios,
+        "usuarios": usuarios,
+        "estado_mascotas": estado_mascotas,
+        "mascotas": mascotas
+    })
+```
+
+---
+
+## 9. Explicación del endpoint `/relacion`
+
+Este endpoint consulta por separado el servicio de usuarios y el servicio de mascotas.
+
+Si los dos servicios están activos, muestra la información de ambos:
+
+```json
+{
+  "estado_mascotas": "mascotas funcionando correctamente",
+  "estado_usuarios": "usuarios funcionando correctamente",
+  "mascotas": [
+    [
+      1,
+      "Toby",
+      "Perro"
+    ]
+  ],
+  "usuarios": [
+    {
+      "id": 1,
+      "nombre": "Mariani"
+    },
+    {
+      "id": 2,
+      "nombre": "Carlos"
+    }
+  ]
+}
+```
+
+Si el servicio de usuarios se cae, el sistema sigue mostrando mascotas:
+
+```json
+{
+  "estado_mascotas": "mascotas funcionando correctamente",
+  "estado_usuarios": "no está funcionando usuarios",
+  "mascotas": [
+    [
+      1,
+      "Toby",
+      "Perro"
+    ]
+  ],
+  "usuarios": []
+}
+```
+
+Si el servicio de mascotas se cae, el sistema sigue mostrando usuarios:
+
+```json
+{
+  "estado_mascotas": "no está funcionando mascotas",
+  "estado_usuarios": "usuarios funcionando correctamente",
+  "mascotas": [],
+  "usuarios": [
+    {
+      "id": 1,
+      "nombre": "Mariani"
+    },
+    {
+      "id": 2,
+      "nombre": "Carlos"
+    }
+  ]
+}
+```
+
+---
+
+## 10. Comandos utilizados
+
+Después de modificar el archivo `gateway/app.py`, se reconstruyó el gateway para que tomara los cambios:
+
+```bash
+docker compose up -d --build gateway
+```
+
+Para encender los servicios se usaron los siguientes comandos:
+
+```bash
+docker compose start usuarios
+docker compose start backend
+```
+
+Para apagar usuarios y probar el funcionamiento parcial:
+
+```bash
+docker compose stop usuarios
+```
+
+Para apagar mascotas/backend y probar el funcionamiento parcial:
+
+```bash
+docker compose stop backend
+```
+
+Para revisar el estado de los contenedores:
+
+```bash
+docker compose ps
+```
+
+---
+
+## 11. Pruebas realizadas
+
+### Prueba con ambos servicios funcionando
+
+Se probó el endpoint:
+
+```txt
+http://localhost:5000/relacion
+```
+
+El sistema mostró correctamente usuarios y mascotas.
+
+---
+
+### Prueba apagando usuarios
+
+Se apagó el servicio de usuarios:
+
+```bash
+docker compose stop usuarios
+```
+
+Luego se recargó:
+
+```txt
+http://localhost:5000/relacion
+```
+
+El sistema mostró el mensaje:
+
+```txt
+no está funcionando usuarios
+```
+
+Pero las mascotas siguieron apareciendo correctamente.
+
+---
+
+### Prueba apagando mascotas
+
+Se apagó el servicio de mascotas/backend:
+
+```bash
+docker compose stop backend
+```
+
+Luego se recargó:
+
+```txt
+http://localhost:5000/relacion
+```
+
+El sistema mostró el mensaje:
+
+```txt
+no está funcionando mascotas
+```
+
+Pero los usuarios siguieron apareciendo correctamente.
+
+---
+
+## 12. Resultado obtenido
+
+Con esta implementación, el sistema tiene dos mejoras importantes:
+
+1. El Circuit Breaker ya no queda bloqueado para siempre, porque después de un tiempo intenta recuperarse usando Half-Open.
+2. El endpoint `/relacion` sigue funcionando parcialmente aunque uno de los servicios esté caído.
+
+Esto permite que el gateway sea más resistente a fallos.
+
+---
+
+## Evidencia de la Fase 4
+
+La evidencia de esta fase se encuentra en:
+
+```txt
+corte_3/laboratorio_circuit_breaker/evidencias/fase4.png
+```
+
+![Evidencia Fase 4](evidencias/fase4.png)
+
+---
+
+## Conclusión de la Fase 4
+
+En esta fase se implementó la recuperación del Circuit Breaker mediante el estado Half-Open.
+
+El sistema ahora espera un tiempo definido antes de volver a intentar comunicarse con un servicio caído.  
+Si el servicio responde correctamente, el circuito se cierra y vuelve a funcionar normalmente.  
+Si el servicio vuelve a fallar, el circuito se abre nuevamente.
+
+Además, el endpoint `/relacion` permite que el sistema siga mostrando la información disponible aunque usuarios o mascotas presenten fallos.
+
+Esto mejora la resiliencia del gateway porque evita insistir innecesariamente y permite que el sistema se recupere de forma controlada.
